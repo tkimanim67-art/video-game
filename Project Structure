@@ -1,0 +1,15 @@
+ZombieFrontierOutbreak/
+├── Assets/
+│   ├── Scripts/
+│   │   ├── Player/
+│   │   ├── Enemies/
+│   │   ├── Weapons/
+│   │   ├── Managers/
+│   │   ├── Environment/
+│   │   ├── UI/
+│   │   └── Audio/
+│   ├── Scenes/
+│   ├── Prefabs/
+│   ├── Materials/
+│   └── Audio/
+└── README.md
