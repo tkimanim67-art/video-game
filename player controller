@@ -1,0 +1,301 @@
+using UnityEngine;
+using TMPro;
+using UnityEngine.InputSystem;
+
+[RequireComponent(typeof(Rigidbody))]
+public class EnhancedPlayerController : MonoBehaviour
+{
+    [Header("Movement Settings")]
+    public float walkSpeed = 5f;
+    public float sprintSpeed = 8f;
+    public float jumpForce = 7f;
+    public float mouseSensitivity = 2f;
+    public float gravity = -9.81f;
+    
+    [Header("Player Stats")]
+    public int maxHealth = 100;
+    public int currentHealth;
+    public int experience = 0;
+    public int level = 1;
+    public int killCount = 0;
+    
+    [Header("Combat Settings")]
+    public float meleeRange = 2f;
+    public int meleeDamage = 20;
+    public float meleeCooldown = 0.5f;
+    
+    [Header("UI References")]
+    public TextMeshProUGUI healthText;
+    public TextMeshProUGUI levelText;
+    public TextMeshProUGUI ammoText;
+    public TextMeshProUGUI killsText;
+    public TextMeshProUGUI waveText;
+    
+    // Private variables
+    private Rigidbody rb;
+    private Camera playerCamera;
+    private float xRotation = 0f;
+    private Vector3 velocity;
+    private bool isGrounded;
+    private float nextMeleeTime;
+    
+    // Input System
+    private PlayerInput playerInput;
+    private InputAction moveAction;
+    private InputAction lookAction;
+    private InputAction jumpAction;
+    private InputAction sprintAction;
+    private InputAction fireAction;
+    private InputAction meleeAction;
+    private InputAction reloadAction;
+    
+    // Weapon system
+    private Weapon currentWeapon;
+    public GameObject weaponHolder;
+    
+    void Awake()
+    {
+        InitializeInputSystem();
+    }
+    
+    void Start()
+    {
+        rb = GetComponent<Rigidbody>();
+        playerCamera = Camera.main;
+        currentHealth = maxHealth;
+        
+        // Lock cursor
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
+        
+        CreateStarterWeapon();
+        UpdateUI();
+        
+        Debug.Log("Player initialized! Controls: WASD-Move, Mouse-Look, LeftClick-Shoot, R-Reload, F-Melee, Space-Jump, Shift-Sprint");
+    }
+    
+    void InitializeInputSystem()
+    {
+        playerInput = GetComponent<PlayerInput>();
+        if (playerInput == null)
+        {
+            playerInput = gameObject.AddComponent<PlayerInput>();
+        }
+        
+        // Create input actions
+        var actions = new InputActionAsset();
+        
+        // Movement
+        moveAction = new InputAction("Move", InputActionType.Value, "<Keyboard>/wasd");
+        lookAction = new InputAction("Look", InputActionType.Value, "<Mouse>/delta");
+        jumpAction = new InputAction("Jump", InputActionType.Button, "<Keyboard>/space");
+        sprintAction = new InputAction("Sprint", InputActionType.Button, "<Keyboard>/leftShift");
+        
+        // Combat
+        fireAction = new InputAction("Fire", InputActionType.Button, "<Mouse>/leftButton");
+        meleeAction = new InputAction("Melee", InputActionType.Button, "<Keyboard>/f");
+        reloadAction = new InputAction("Reload", InputActionType.Button, "<Keyboard>/r");
+        
+        // Add to asset and enable
+        actions.AddActionMap("Player").AddActions(new[] { moveAction, lookAction, jumpAction, sprintAction, fireAction, meleeAction, reloadAction });
+        playerInput.actions = actions;
+        playerInput.actions.Enable();
+    }
+    
+    void Update()
+    {
+        if (currentHealth <= 0) return;
+        
+        HandleMouseLook();
+        HandleGroundCheck();
+        HandleJump();
+        HandleMelee();
+        UpdateUI();
+    }
+    
+    void FixedUpdate()
+    {
+        if (currentHealth <= 0) return;
+        
+        HandleMovement();
+    }
+    
+    void HandleMovement()
+    {
+        Vector2 moveInput = moveAction.ReadValue<Vector2>();
+        bool isSprinting = sprintAction.IsPressed();
+        
+        Vector3 movement = (transform.right * moveInput.x + transform.forward * moveInput.y).normalized;
+        float currentSpeed = isSprinting ? sprintSpeed : walkSpeed;
+        
+        // Apply movement
+        Vector3 targetVelocity = movement * currentSpeed;
+        targetVelocity.y = rb.velocity.y; // Preserve vertical velocity for jumping/gravity
+        
+        rb.velocity = targetVelocity;
+    }
+    
+    void HandleMouseLook()
+    {
+        Vector2 lookInput = lookAction.ReadValue<Vector2>() * 0.1f; // Scale down mouse input
+        
+        float mouseX = lookInput.x * mouseSensitivity;
+        float mouseY = lookInput.y * mouseSensitivity;
+        
+        xRotation -= mouseY;
+        xRotation = Mathf.Clamp(xRotation, -90f, 90f);
+        
+        playerCamera.transform.localRotation = Quaternion.Euler(xRotation, 0f, 0f);
+        transform.Rotate(Vector3.up * mouseX);
+    }
+    
+    void HandleGroundCheck()
+    {
+        RaycastHit hit;
+        isGrounded = Physics.Raycast(transform.position, Vector3.down, out hit, 1.1f);
+    }
+    
+    void HandleJump()
+    {
+        if (jumpAction.triggered && isGrounded)
+        {
+            rb.AddForce(Vector3.up * jumpForce, ForceMode.Impulse);
+        }
+    }
+    
+    void HandleMelee()
+    {
+        if (meleeAction.triggered && Time.time >= nextMeleeTime)
+        {
+            nextMeleeTime = Time.time + meleeCooldown;
+            PerformMeleeAttack();
+        }
+    }
+    
+    void PerformMeleeAttack()
+    {
+        Debug.Log("Melee Attack!");
+        
+        RaycastHit hit;
+        if (Physics.Raycast(playerCamera.transform.position, playerCamera.transform.forward, out hit, meleeRange))
+        {
+            ZombieController zombie = hit.transform.GetComponent<ZombieController>();
+            if (zombie != null)
+            {
+                zombie.TakeDamage(meleeDamage);
+                Debug.Log($"Melee hit zombie for {meleeDamage} damage!");
+            }
+        }
+    }
+    
+    public void TakeDamage(int damage)
+    {
+        currentHealth -= damage;
+        Debug.Log($"Player took {damage} damage! Health: {currentHealth}");
+        
+        // Visual feedback
+        StartCoroutine(DamageFlash());
+        
+        if (currentHealth <= 0)
+        {
+            Die();
+        }
+    }
+    
+    private System.Collections.IEnumerator DamageFlash()
+    {
+        // Could add screen flash effect here
+        yield return new WaitForSeconds(0.1f);
+    }
+    
+    public void Heal(int healAmount)
+    {
+        currentHealth = Mathf.Min(currentHealth + healAmount, maxHealth);
+        Debug.Log($"Healed for {healAmount}. Current health: {currentHealth}");
+    }
+    
+    public void AddExperience(int exp)
+    {
+        experience += exp;
+        CheckLevelUp();
+    }
+    
+    public void AddKill()
+    {
+        killCount++;
+    }
+    
+    void CheckLevelUp()
+    {
+        int expNeeded = level * 100;
+        if (experience >= expNeeded)
+        {
+            level++;
+            experience -= expNeeded;
+            LevelUp();
+        }
+    }
+    
+    void LevelUp()
+    {
+        maxHealth += 20;
+        currentHealth = maxHealth;
+        
+        // Upgrade weapon on level up
+        if (currentWeapon != null)
+        {
+            currentWeapon.UpgradeDamage(5);
+        }
+        
+        Debug.Log($"Level Up! Now level {level}. Health increased to {maxHealth}");
+    }
+    
+    void Die()
+    {
+        Debug.Log("Player Died!");
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+        
+        // Game over logic handled by GameManager
+        if (EnhancedGameManagerWithEnvironments.Instance != null)
+        {
+            EnhancedGameManagerWithEnvironments.Instance.GameOver();
+        }
+    }
+    
+    void CreateStarterWeapon()
+    {
+        GameObject weaponObj = new GameObject("AssaultRifle");
+        weaponObj.transform.SetParent(weaponHolder.transform);
+        weaponObj.transform.localPosition = new Vector3(0.3f, -0.2f, 0.3f);
+        
+        currentWeapon = weaponObj.AddComponent<Weapon>();
+        currentWeapon.weaponName = "Assault Rifle";
+        currentWeapon.damage = 15;
+        currentWeapon.maxAmmo = 30;
+        currentWeapon.currentAmmo = 30;
+        currentWeapon.fireRate = 0.15f;
+        currentWeapon.playerCamera = playerCamera;
+    }
+    
+    void UpdateUI()
+    {
+        if (healthText != null)
+            healthText.text = $"HEALTH: {currentHealth}/{maxHealth}";
+        
+        if (levelText != null)
+            levelText.text = $"LEVEL: {level}";
+        
+        if (ammoText != null && currentWeapon != null)
+            ammoText.text = $"AMMO: {currentWeapon.currentAmmo}/{currentWeapon.maxAmmo}";
+        
+        if (killsText != null)
+            killsText.text = $"KILLS: {killCount}";
+    }
+    
+    public void UpdateWaveUI(int wave)
+    {
+        if (waveText != null)
+            waveText.text = $"WAVE: {wave}";
+    }
+}
